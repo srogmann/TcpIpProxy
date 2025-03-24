@@ -131,6 +131,10 @@ class StreamDump implements Runnable {
                 for (SearchReplace sr : searchReplaces) {
                     sContentMod = sContentMod.replace(sr.search(), sr.replace());
                 }
+                if (!sContent.equals(sContentMod)) {
+                    // Do we have to adjust a Content-Length-header?
+                    sContentMod = adjustContentLength(sContentMod, ausgabe);
+                }
                 String escapedContent = escapeContent(sContent);
                 if (msgNo <= maxNumMsgs || sContent.startsWith("GET ") || sContent.startsWith("POST ")) {
                     String contDispl = (escapedContent.length() < 500) ? escapedContent : escapedContent.substring(0, 500) + "[...]";
@@ -210,12 +214,70 @@ class StreamDump implements Runnable {
         this.router = router;
     }
 
+    static String adjustContentLength(String content, Consumer<String> ausgabe) {
+        int bodyStartIndex = content.indexOf("\r\n\r\n");
+        if (bodyStartIndex == -1) {
+            return content; // No headers/body structure found
+        }
+
+        String headersPart = content.substring(0, bodyStartIndex);
+        String body = content.substring(bodyStartIndex + 4); // Skip \r\n\r\n
+
+        String[] headersLines = headersPart.split("\r\n");
+        int contentLengthIndex = -1;
+        String contentLengthValue = null;
+        final String HEADER = "Content-Length: ";
+
+        // Find case-insensitive "Content-Length" header
+        for (int i = 0; i < headersLines.length; i++) {
+            String line = headersLines[i];
+            if (line.regionMatches(true, 0, HEADER, 0, HEADER.length())) {
+                // Extract value (after colon and trimming whitespace)
+                int colonPos = line.indexOf(':');
+                if (colonPos != -1) {
+                    contentLengthValue = line.substring(colonPos + 1).trim();
+                    contentLengthIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (contentLengthIndex == -1) {
+            return content; // No Content-Length header present
+        }
+
+        // Calculate the body length in UTF-8 bytes
+        int newBodyLength = body.getBytes(StandardCharsets.UTF_8).length;
+
+        try {
+            int currentLength = Integer.parseInt(contentLengthValue);
+            if (currentLength == newBodyLength) {
+                return content; // No change needed
+            }
+        } catch (NumberFormatException e) {
+            // Invalid current value; skip adjustment
+            ausgabe.accept("Invalid current content-length: " + contentLengthValue); 
+            return content;
+        }
+
+        // Update the header with new length (in bytes)
+        headersLines[contentLengthIndex] = "Content-Length: " + newBodyLength;
+        String newHeaders = String.join("\r\n", Arrays.asList(headersLines));
+        String newContent = newHeaders + "\r\n\r\n" + body;
+
+        // Log the adjustment
+        ausgabe.accept(String.format("Content-Length adjusted from %d to %d", 
+            Integer.parseInt(contentLengthValue), newBodyLength));
+
+        return newContent;
+    }
+
     /**
      * Escapes control characters and non-printable characters in content.
      * @param content Raw content to process
      * @return Escaped content with readable representations for logs
      */
-    private String escapeContent(String content) {
+    static String escapeContent(String content) {
         StringBuilder escaped = new StringBuilder();
         for (char c : content.toCharArray()) {
             if (c == '\n') {
