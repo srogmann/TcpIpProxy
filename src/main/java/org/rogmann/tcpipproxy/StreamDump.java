@@ -27,6 +27,8 @@ import org.rogmann.tcpipproxy.StreamRouter.TransferSockets;
 class StreamDump implements Runnable {
     private static final int MAX_MSGS_DISPLAY = Integer.parseInt(System.getProperty("max.msgs.display", "999999999"));
 
+    private static final String HEADER_CONTENT_LENGTH = "Content-Length: ";
+
     private final InputStream is;
     private final OutputStream os;
     private final Direction direction;
@@ -133,7 +135,7 @@ class StreamDump implements Runnable {
                 }
                 if (!sContent.equals(sContentMod)) {
                     // Do we have to adjust a Content-Length-header?
-                    sContentMod = adjustContentLength(sContentMod, ausgabe);
+                    sContentMod = adjustContentLength(sContent, sContentMod, ausgabe);
                 }
                 String escapedContent = escapeContent(sContent);
                 if (msgNo <= maxNumMsgs || sContent.startsWith("GET ") || sContent.startsWith("POST ")) {
@@ -214,10 +216,48 @@ class StreamDump implements Runnable {
         this.router = router;
     }
 
-    static String adjustContentLength(String content, Consumer<String> ausgabe) {
+    record HttpRequestStart(String[] headersLines, int contentLength, int contentLengthIndex, String bodyPart, int bodyLen) { }
+
+    /**
+     * Checks if the content-length of the modified body has to be adjusted.
+     * @param contentOrig original request
+     * @param contentMod modified request
+     * @param ausgabe consumer of messages
+     * @return modified request
+     */
+    static String adjustContentLength(String contentOrig, String contentMod, Consumer<String> ausgabe) {
+        if (!contentOrig.contains("HTTP/1.")) {
+            return contentMod;
+        }
+        HttpRequestStart reqOrig = parseHttpRequest(contentOrig, ausgabe);
+        HttpRequestStart reqMod = parseHttpRequest(contentMod, ausgabe);
+        if (reqOrig == null || reqMod == null) {
+            return contentMod;
+        }
+        if (reqOrig.contentLength() != reqOrig.bodyLen()) {
+            // The content doesn't contain the complete body.
+            return contentMod;
+        }
+
+        final int contentLengthAdjusted = reqOrig.contentLength
+                + reqMod.bodyLen - reqOrig.bodyLen;
+
+        // Update the header with new length (in bytes)
+        reqMod.headersLines()[reqMod.contentLengthIndex] = "Content-Length: " + contentLengthAdjusted;
+        String newHeaders = String.join("\r\n", Arrays.asList(reqMod.headersLines()));
+        String newContent = newHeaders + "\r\n\r\n" + reqMod.bodyPart;
+
+        // Log the adjustment
+        ausgabe.accept(String.format("Content-Length adjusted from %d to %d",
+            reqOrig.contentLength, contentLengthAdjusted));
+
+        return newContent;
+    }
+
+    static HttpRequestStart parseHttpRequest(String content, Consumer<String> ausgabe) {
         int bodyStartIndex = content.indexOf("\r\n\r\n");
         if (bodyStartIndex == -1) {
-            return content; // No headers/body structure found
+            return null; // No end-of-headers present
         }
 
         String headersPart = content.substring(0, bodyStartIndex);
@@ -226,12 +266,11 @@ class StreamDump implements Runnable {
         String[] headersLines = headersPart.split("\r\n");
         int contentLengthIndex = -1;
         String contentLengthValue = null;
-        final String HEADER = "Content-Length: ";
 
         // Find case-insensitive "Content-Length" header
         for (int i = 0; i < headersLines.length; i++) {
             String line = headersLines[i];
-            if (line.regionMatches(true, 0, HEADER, 0, HEADER.length())) {
+            if (line.regionMatches(true, 0, HEADER_CONTENT_LENGTH, 0, HEADER_CONTENT_LENGTH.length())) {
                 // Extract value (after colon and trimming whitespace)
                 int colonPos = line.indexOf(':');
                 if (colonPos != -1) {
@@ -243,33 +282,22 @@ class StreamDump implements Runnable {
         }
 
         if (contentLengthIndex == -1) {
-            return content; // No Content-Length header present
+            return null; // No Content-Length header present
         }
 
         // Calculate the body length in UTF-8 bytes
-        int newBodyLength = body.getBytes(StandardCharsets.UTF_8).length;
+        int bodyLength = body.getBytes(StandardCharsets.UTF_8).length;
 
+        int contentLength;
         try {
-            int currentLength = Integer.parseInt(contentLengthValue);
-            if (currentLength == newBodyLength) {
-                return content; // No change needed
-            }
+            contentLength = Integer.parseInt(contentLengthValue);
         } catch (NumberFormatException e) {
             // Invalid current value; skip adjustment
-            ausgabe.accept("Invalid current content-length: " + contentLengthValue); 
-            return content;
+            ausgabe.accept("Invalid content-length: " + contentLengthValue); 
+            return null;
         }
 
-        // Update the header with new length (in bytes)
-        headersLines[contentLengthIndex] = "Content-Length: " + newBodyLength;
-        String newHeaders = String.join("\r\n", Arrays.asList(headersLines));
-        String newContent = newHeaders + "\r\n\r\n" + body;
-
-        // Log the adjustment
-        ausgabe.accept(String.format("Content-Length adjusted from %d to %d", 
-            Integer.parseInt(contentLengthValue), newBodyLength));
-
-        return newContent;
+        return new HttpRequestStart(headersLines, contentLength, contentLengthIndex, body, bodyLength);
     }
 
     /**
