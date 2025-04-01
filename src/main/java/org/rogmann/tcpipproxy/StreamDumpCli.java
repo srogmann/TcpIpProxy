@@ -63,7 +63,7 @@ public class StreamDumpCli {
 
         List<SearchReplace> searchReplaces = new ArrayList<>();
         for (int i = searchStartIndex; i + 1 < args.length; i += 2) {
-            searchReplaces.add(new SearchReplace(args[i], args[i + 1]));
+            searchReplaces.add(new SearchReplace(unescape(args[i]), unescape(args[i + 1])));
         }
         System.out.println("Search-Replaces: " + searchReplaces);
         try (ServerSocket serverSocket = new ServerSocket(bindPort, 50, java.net.InetAddress.getByName(bindHost))) {
@@ -72,13 +72,17 @@ public class StreamDumpCli {
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 Socket destSocket;
-                if ("tcp".equalsIgnoreCase(destTransport)) {
-                    destSocket = new Socket(destHost, destPort);
-                } else if ("tls".equalsIgnoreCase(destTransport)) {
-                    SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
-                    destSocket = factory.createSocket(destHost, destPort);
-                } else {
-                    throw new IllegalArgumentException("Invalid Dest-Transport value: " + destTransport);
+                try {
+                    if ("tcp".equalsIgnoreCase(destTransport)) {
+                        destSocket = new Socket(destHost, destPort);
+                    } else if ("tls".equalsIgnoreCase(destTransport)) {
+                        SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+                        destSocket = factory.createSocket(destHost, destPort);
+                    } else {
+                        throw new IllegalArgumentException("Invalid Dest-Transport value: " + destTransport);
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("IO-error at connect to %s/%d", destHost, destPort), e);
                 }
 
                 System.out.println("Connection established: " + clientSocket + " -> " + destHost + ":" + destPort);
@@ -102,5 +106,23 @@ public class StreamDumpCli {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Converts escaped control characters in the given pattern string into their actual characters.
+     * The following replacements are performed:
+     * - <code>"\\n"</code> → newline character (<code>\n</code>)
+     * - <code>"\\r"</code> → carriage return (<code>\r</code>)
+     * - <code>"\\t"</code> → tab character (<code>\t</code>)
+     * - <code>"\\\\"</code> → single backslash (<code>\\</code>)
+     *
+     * @param pattern Input string containing escaped control sequences
+     * @return Unescaped string with control characters resolved
+     */
+    static String unescape(String pattern) {
+        return pattern.replace("\\n", "\n") // Newline
+                     .replace("\\r", "\r") // Carriage return
+                     .replace("\\t", "\t") // Tab
+                     .replace("\\\\", "\\"); // Backslash
     }
 }
