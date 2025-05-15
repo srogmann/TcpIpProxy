@@ -57,14 +57,14 @@ public class RsyncSenderMain {
         }
 
         if (sourceDir == null || host == null || port == 0 || includeRegex == null) {
-            System.out.println("Fehlende Pflichtargumente für den Sender.");
-            System.out.println("Usage: java RsyncSenderMain --dir <QUELLVERZEICHNIS> --host <ZIELHOST> --port <ZIELPORT> --include <REGEXP>");
+            System.out.println("Missing required arguments for the sender.");
+            System.out.println("Usage: java RsyncSenderMain --dir <SOURCE-DIRECTORY> --host <TARGET-HOST> --port <TARGET-PORT> --include <REGEXP>");
             System.exit(1);
         }
 
         Path sourcePath = Paths.get(sourceDir);
         if (!Files.exists(sourcePath) || !Files.isDirectory(sourcePath)) {
-            System.out.println("Quellverzeichnis existiert nicht oder ist kein Verzeichnis.");
+            System.out.println("Source directory does not exist or is not a directory.");
             System.exit(2);
         }
 
@@ -108,7 +108,7 @@ public class RsyncSenderMain {
                             if (!isRunning.get()) {
                                 break;
                             }
-                            System.out.printf("Übertragen: %d Dateien, %.2f MB, aktuelle Datei: %s (%d KB)%n",
+                            System.out.printf("Transferred: %d files, %.2f MB, current file: %s (%d KB)%n",
                                     filesSent.get(), totalBytesSent.get() / (1024.0 * 1024.0), currentFileName.get(), currentFileSize.get() / 1024);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -146,6 +146,11 @@ public class RsyncSenderMain {
                     long fileSize = Files.size(file);
                     bb.putLong(0, fileSize);
                     out.write(bb.array(), 0, 8);
+
+                    // Modification time senden
+                    long lastModifiedTime = Files.getLastModifiedTime(file).toMillis();
+                    bb.putLong(0, lastModifiedTime);
+                    out.write(bb.array(), 0, 8);
     
                     // Dateiinhalt in Chunks senden und SHA256 berechnen
                     try (FileInputStream fis = new FileInputStream(file.toFile())) {
@@ -172,7 +177,7 @@ public class RsyncSenderMain {
                     }
                     String ackStr = new String(ack, StandardCharsets.US_ASCII);
                     if (!ackStr.equals("Ack ")) {
-                        System.out.println("Unerwartete Antwort vom Empfänger: " + ackStr);
+                        System.out.println("Unexpected response from the receiver: " + ackStr);
                     }
     
                     // Statistik aktualisieren
@@ -190,7 +195,7 @@ public class RsyncSenderMain {
                 out.write(closeMsgType);
                 out.flush();
     
-                System.out.printf("Übertragen: %d Dateien, %.2f MB%n",
+                System.out.printf("Transferred: %d files, %.2f MB%n",
                         filesSent.get(), totalBytesSent.get() / (1024.0 * 1024.0));
             }
 
@@ -201,4 +206,3 @@ public class RsyncSenderMain {
         }
     }
 }
-

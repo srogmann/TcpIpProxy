@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -32,6 +33,7 @@ public class RsyncReceiverMain {
     private static final int MSG_TYPE_CLOSE = 0;
     private static final int FILE_NAME_LENGTH_SIZE = 4;
     private static final int FILE_SIZE_SIZE = 8;
+    private static final int MOD_TIME_SIZE = 8;
     private static final int SHA256_SIZE = 32;
     private static final int CHUNK_SIZE = 65536; // 64 KB
 
@@ -55,8 +57,8 @@ public class RsyncReceiverMain {
         }
 
         if (destDir == null || bindIp == null || bindPort == 0) {
-            System.out.println("Fehlende Pflichtargumente für den Empfänger.");
-            System.out.println("Nutzung: java RsyncReceiverMain --destDir <ZIELVERZEICHNIS> --bind-ip <BIND-IP> --bind-port <LISTENER-PORT>");
+            System.out.println("Missing required arguments for the receiver.");
+            System.out.println("Usage: java RsyncReceiverMain --destDir <DESTINATION-DIRECTORY> --bind-ip <BIND-IP> --bind-port <LISTENER-PORT>");
             System.exit(1);
         }
 
@@ -65,7 +67,7 @@ public class RsyncReceiverMain {
             try {
                 Files.createDirectories(destinationPath);
             } catch (IOException e) {
-                System.out.println("Fehler beim Erstellen des Zielverzeichnisses.");
+                System.out.println("Error while creating the destination directory.");
                 e.printStackTrace();
                 return;
             }
@@ -73,7 +75,7 @@ public class RsyncReceiverMain {
 
         try (ServerSocket serverSocket = new ServerSocket()) {
             serverSocket.bind(new InetSocketAddress(InetAddress.getByName(bindIp), bindPort));
-            System.out.println("Empfänger lauscht auf Port " + bindPort);
+            System.out.println("Receiver is listening on port " + bindPort);
 
             try (Socket clientSocket = serverSocket.accept();
                  InputStream in = clientSocket.getInputStream();
@@ -104,7 +106,7 @@ public class RsyncReceiverMain {
                             if (!isRunning.get()) {
                                 break;
                             }
-                            System.out.printf("Empfangen: %d Dateien, %.2f MB, aktuelle Datei: %s (%d KB)%n",
+                            System.out.printf("Received: %d files, %.2f MB, current file: %s (%d KB)%n",
                                     filesReceived.get(), totalBytesReceived.get() / (1024.0 * 1024.0), currentFileName.get(), currentFileSize.get() / 1024);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -126,7 +128,7 @@ public class RsyncReceiverMain {
 
                     String msgHeaderStr = new String(msgHeader, StandardCharsets.US_ASCII);
                     if (!msgHeaderStr.equals("Msg ")) {
-                        System.out.println("Ungültiger Nachrichtenheader: " + msgHeaderStr);
+                        System.out.println("Invalid message header: " + msgHeaderStr);
                         break;
                     }
 
@@ -140,7 +142,7 @@ public class RsyncReceiverMain {
 
                     if (msgType == MSG_TYPE_CLOSE) {
                         // Close-Nachricht empfangen
-                        System.out.println("Empfangen: Schließen");
+                        System.out.println("Received: Close");
                         break;
                     } else if (msgType == MSG_TYPE_FILE) {
                         // FILE-Nachricht verarbeiten
@@ -171,11 +173,19 @@ public class RsyncReceiverMain {
                         long fileSize = ByteBuffer.wrap(fileSizeBytes).getLong();
                         currentFileSize.set(fileSize);
 
+                        // Modification time lesen
+                        byte[] modTimeBytes = new byte[MOD_TIME_SIZE];
+                        bytesRead = 0;
+                        while (bytesRead < MOD_TIME_SIZE) {
+                            bytesRead += in.read(modTimeBytes, bytesRead, MOD_TIME_SIZE - bytesRead);
+                        }
+                        long modTime = ByteBuffer.wrap(modTimeBytes).getLong();
+
                         // Sicherstellen, dass der Dateiname im Zielverzeichnis ist
                         Path fullDestPath = destinationPath.resolve(filename).normalize();
                         if (!fullDestPath.startsWith(destinationPath)) {
-                            System.out.println("Ungültiger Dateipfad: " + filename);
-                            throw new IOException("Ungültiger Dateipfad: " + filename);
+                            System.out.println("Invalid file path: " + filename);
+                            throw new IOException("Invalid file path: " + filename);
                         }
 
                         // Zielverzeichnis erstellen
@@ -202,6 +212,8 @@ public class RsyncReceiverMain {
                             }
                             fos.flush();
                         }
+                        // Setzen der Modifikationszeit nach dem Empfangen
+                        Files.setLastModifiedTime(fullDestPath, FileTime.fromMillis(modTime));
 
                         // SHA256-Summe des empfangenen Inhalts
                         byte[] computedChecksum = digest.digest();
@@ -215,8 +227,9 @@ public class RsyncReceiverMain {
 
                         // Hash-Prüfung
                         if (!Arrays.equals(computedChecksum, receivedChecksum)) {
-                            System.out.println("Hash stimmt nicht überein: " + filename);
-                            throw new IOException("Hash stimmt nicht überein: " + filename);
+                            System.out.println("Hash computed: " + Arrays.toString(computedChecksum));
+                            System.out.println("Hash received: " + Arrays.toString(receivedChecksum));
+                            throw new IOException("Hash does not match: " + filename);
                         }
 
                         // Bestätigung senden ("Ack ")
@@ -227,9 +240,8 @@ public class RsyncReceiverMain {
                         // Statistik aktualisieren
                         filesReceived.incrementAndGet();
                         totalBytesReceived.addAndGet(fileSize);
-
                     } else {
-                        System.out.println("Unbekannter Nachrichtentyp: " + msgType);
+                        System.out.println("Unknown message type: " + msgType);
                         break;
                     }
                 }
@@ -237,7 +249,7 @@ public class RsyncReceiverMain {
                 // Status-Thread beenden
                 isRunning.set(false);
 
-                System.out.printf("Empfangen: %d Dateien, %.2f MB%n",
+                System.out.printf("Received: %d files, %.2f MB%n",
                         filesReceived.get(), totalBytesReceived.get() / (1024.0 * 1024.0));
             }
         } catch (NoSuchAlgorithmException e) {
@@ -246,6 +258,4 @@ public class RsyncReceiverMain {
             throw new RuntimeException("Unexpected IO-error while receiving files", e);
         }
     }
-
 }
-
