@@ -73,6 +73,7 @@ public class RsyncReceiverMain {
             }
         }
 
+        final AtomicBoolean isRunning = new AtomicBoolean(true);
         try (ServerSocket serverSocket = new ServerSocket()) {
             serverSocket.bind(new InetSocketAddress(InetAddress.getByName(bindIp), bindPort));
             System.out.println("Receiver is listening on port " + bindPort);
@@ -80,6 +81,7 @@ public class RsyncReceiverMain {
             try (Socket clientSocket = serverSocket.accept();
                  InputStream in = clientSocket.getInputStream();
                  OutputStream out = clientSocket.getOutputStream()) {
+                System.out.format("New client-connection from %s%n", clientSocket.getRemoteSocketAddress());
 
                 // Eyecatcher "RsnP" prüfen
                 byte[] eyecatcher = new byte[EYECATCHER_SIZE];
@@ -97,7 +99,6 @@ public class RsyncReceiverMain {
                 final AtomicLong totalBytesReceived = new AtomicLong(0);
                 final AtomicReference<String> currentFileName = new AtomicReference<>("none");
                 final AtomicReference<Long> currentFileSize = new AtomicReference<>(0L);
-                final AtomicBoolean isRunning = new AtomicBoolean(true);
 
                 Thread statusThread = new Thread(() -> {
                     while (isRunning.get()) {
@@ -256,6 +257,8 @@ public class RsyncReceiverMain {
             throw new RuntimeException("Missing hash-algorithm", e);
         } catch (IOException e) {
             throw new RuntimeException("Unexpected IO-error while receiving files", e);
+        } finally {
+            isRunning.set(false);
         }
     }
 }

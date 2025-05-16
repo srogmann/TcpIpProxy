@@ -1,5 +1,6 @@
 package org.rogmann.tcpipproxy;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -70,6 +71,7 @@ public class RsyncSenderMain {
 
         Pattern pattern = Pattern.compile(includeRegex);
 
+        final AtomicBoolean isRunning = new AtomicBoolean(true);
         try (Socket socket = new Socket()) {
 
             socket.connect(new InetSocketAddress(host, port));
@@ -99,7 +101,6 @@ public class RsyncSenderMain {
                 final AtomicLong totalBytesSent = new AtomicLong(0);
                 final AtomicReference<String> currentFileName = new AtomicReference<>("none");
                 final AtomicReference<Long> currentFileSize = new AtomicReference<>(0L);
-                final AtomicBoolean isRunning = new AtomicBoolean(true);
     
                 Thread statusThread = new Thread(() -> {
                     while (isRunning.get()) {
@@ -124,7 +125,8 @@ public class RsyncSenderMain {
                 // Verarbeitung der Dateien
                 for (Path file : files) {
                     String relativePath = sourcePath.relativize(file).toString();
-                    currentFileName.set(relativePath);
+                    String pathName = relativePath.replace(File.pathSeparatorChar, '/');
+                    currentFileName.set(pathName);
                     currentFileSize.set(Files.size(file));
     
                     // Nachrichtenheader (Msg ) und Typ 1
@@ -134,7 +136,7 @@ public class RsyncSenderMain {
                     out.write(msgType);
     
                     // Dateiname-Länge
-                    byte[] filenameBytes = relativePath.getBytes(StandardCharsets.UTF_8);
+                    byte[] filenameBytes = pathName.getBytes(StandardCharsets.UTF_8);
                     int filenameLength = filenameBytes.length;
                     bb.putInt(0, filenameLength);
                     out.write(bb.array(), 0, 4);
@@ -203,6 +205,8 @@ public class RsyncSenderMain {
             throw new RuntimeException("Missing hash-algorithm", e);
         } catch (IOException e) {
             throw new RuntimeException("IO-Error while sending files", e);
+        } finally {
+            isRunning.set(false);
         }
     }
 }
