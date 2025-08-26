@@ -4,8 +4,9 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.Socket;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -94,31 +95,31 @@ public class HttpServerDispatchThread implements Runnable {
         }
 
         String method = parts[0];
-        String uri = parts[1];
+        String rawPath = parts[1];
         String protocol = parts[2];
 
         // Parse headers
-        Map<String, String> headers = parseHeaders(inputStream);
+        HttpHeaders headers = parseHeaders(inputStream);
 
         // Check for connection keep-alive
-        String connectionHeader = headers.get("Connection");
+        String connectionHeader = headers.getFirst("Connection");
         boolean keepAlive = "HTTP/1.1".equals(protocol) && 
                            !"close".equalsIgnoreCase(connectionHeader);
 
         // Create exchange object
         HttpServerDispatchExchange exchange = new HttpServerDispatchExchange(
-            socket, inputStream, outputStream, method, uri, protocol, headers, keepAlive);
+            socket, inputStream, outputStream, method, rawPath, protocol, headers, keepAlive);
 
         try {
             if (handler != null) {
                 handler.handle(exchange);
             } else {
-                exchange.sendResponseHeaders(404, -1, Collections.emptyMap());
+                exchange.sendResponseHeaders(404, -1);
             }
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Error in handler", e);
             try {
-                exchange.sendResponseHeaders(500, -1, Collections.emptyMap());
+                exchange.sendResponseHeaders(500, -1);
             } catch (IOException ioException) {
                 LOGGER.log(Level.FINE, "IOException while sending error response", ioException);
                 // Ignore, connection might be closed
@@ -171,8 +172,8 @@ public class HttpServerDispatchThread implements Runnable {
      * @return map of headers
      * @throws IOException if an I/O error occurs
      */
-    private Map<String, String> parseHeaders(BufferedInputStream inputStream) throws IOException {
-        Map<String, String> headers = new HashMap<>();
+    private HttpHeaders parseHeaders(BufferedInputStream inputStream) throws IOException {
+        Map<String, List<String>> headers = new HashMap<>();
         while (true) {
             String line = readLine(inputStream);
             if (line == null || line.isEmpty()) {
@@ -182,10 +183,10 @@ public class HttpServerDispatchThread implements Runnable {
             if (colonIndex > 0) {
                 String name = line.substring(0, colonIndex).trim();
                 String value = line.substring(colonIndex + 1).trim();
-                headers.put(name, value);
+                headers.computeIfAbsent(name, k -> new ArrayList<>(1)).add(value);
             }
         }
-        return headers;
+        return new HttpHeaders(headers, true);
     }
 
     private void sendBadRequest() throws IOException {

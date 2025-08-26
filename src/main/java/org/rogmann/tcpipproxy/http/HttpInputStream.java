@@ -2,7 +2,6 @@ package org.rogmann.tcpipproxy.http;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -25,11 +24,11 @@ public class HttpInputStream extends InputStream {
      * @param inputStream the underlying input stream
      * @param headers the HTTP headers
      */
-    public HttpInputStream(InputStream inputStream, Map<String, String> headers) {
+    public HttpInputStream(InputStream inputStream, HttpHeaders headers) {
         this.inputStream = inputStream;
-        String transferEncoding = headers.get("Transfer-Encoding");
+        String transferEncoding = headers.getFirst("Transfer-Encoding");
         this.isChunked = "chunked".equalsIgnoreCase(transferEncoding);
-        String sContentLength = headers.get("Content-Length");
+        String sContentLength = headers.getFirst("Content-Length");
         if (LOGGER.isLoggable(Level.FINER)) {
         	LOGGER.finer("chunked: " + isChunked);
         }

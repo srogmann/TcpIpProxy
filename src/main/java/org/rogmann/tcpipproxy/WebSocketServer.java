@@ -10,9 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 import org.rogmann.tcpipproxy.http.HttpHandler;
+import org.rogmann.tcpipproxy.http.HttpHeaders;
 import org.rogmann.tcpipproxy.http.HttpServerDispatch;
 import org.rogmann.tcpipproxy.http.HttpServerDispatchExchange;
 
@@ -386,7 +384,7 @@ public class WebSocketServer {
 
         @Override
         public void handle(HttpServerDispatchExchange exchange) throws IOException {
-            String path = exchange.getRequestURI().replaceFirst("[?].*", "");
+            String path = exchange.getRequestRawPath().replaceFirst("[?].*", "");
             if ("/".equals(path)) {
                 path = "/index.html";
             }
@@ -396,24 +394,24 @@ public class WebSocketServer {
             }
 
             // Check for WebSocket upgrade request
-            if (!"websocket".equals(exchange.getRequestHeaders().get("Upgrade"))) {
+            if (!"websocket".equals(exchange.getRequestHeaders().getFirst("Upgrade"))) {
                 sendError(exchange, 400, "Invalid WebSocket upgrade request");
                 return;
             }
 
-            String secWebSocketKey = exchange.getRequestHeaders().get("Sec-WebSocket-Key");
+            String secWebSocketKey = exchange.getRequestHeaders().getFirst("Sec-WebSocket-Key");
             if (secWebSocketKey == null) {
                 sendError(exchange, 400, "Missing Sec-WebSocket-Key header");
                 return;
             }
 
             String secWebSocketAccept = computeAcceptKey(secWebSocketKey);
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Upgrade", "websocket");
-            headers.put("Connection", "keep-alive, Upgrade");
-            headers.put("Sec-WebSocket-Accept", secWebSocketAccept);
+            HttpHeaders responseHeaders = exchange.getResponseHeaders();
+            responseHeaders.set("Upgrade", "websocket");
+            responseHeaders.set("Connection", "keep-alive, Upgrade");
+            responseHeaders.set("Sec-WebSocket-Accept", secWebSocketAccept);
 
-            exchange.sendResponseHeaders(101, 0, headers);
+            exchange.sendResponseHeaders(101, 0);
 
             // Create connection
             Socket socket = exchange.getSocket();
@@ -460,7 +458,7 @@ public class WebSocketServer {
 
         private void sendError(HttpServerDispatchExchange exchange, int code, String message) throws IOException {
             String response = "HTTP/1.1 " + code + " " + message + "\r\n\r\n";
-            exchange.sendResponseHeaders(code, response.length(), Collections.emptyMap());
+            exchange.sendResponseHeaders(code, response.length());
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(response.getBytes(StandardCharsets.UTF_8));
             }

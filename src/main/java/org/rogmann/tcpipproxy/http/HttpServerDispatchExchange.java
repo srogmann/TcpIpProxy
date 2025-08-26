@@ -6,9 +6,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -23,12 +22,12 @@ public class HttpServerDispatchExchange {
     private final BufferedInputStream inputStream;
     private final BufferedOutputStream outputStream;
     private final String method;
-    private final String uri;
+    private final String rawPath;
     private final String protocol;
-    private final Map<String, String> requestHeaders;
+    private final HttpHeaders requestHeaders;
     private final boolean keepAlive;
 
-    private final Map<String, String> responseHeaders = new HashMap<>();
+    private final HttpHeaders responseHeaders = new HttpHeaders(false);
     private boolean responseHeadersSent = false;
     private boolean upgradeRequested = false;
 
@@ -41,7 +40,7 @@ public class HttpServerDispatchExchange {
      * @param inputStream the input stream
      * @param outputStream the output stream
      * @param method the HTTP method
-     * @param uri the request URI
+     * @param rawpath raw path of the request URI
      * @param protocol the HTTP protocol version
      * @param requestHeaders the request headers
      * @param keepAlive whether connection should be kept alive
@@ -51,21 +50,21 @@ public class HttpServerDispatchExchange {
             BufferedInputStream inputStream,
             BufferedOutputStream outputStream,
             String method,
-            String uri,
+            String rawPath,
             String protocol,
-            Map<String, String> requestHeaders,
+            HttpHeaders requestHeaders,
             boolean keepAlive) {
         if (LOGGER.isLoggable(Level.FINE)) {
-            LOGGER.fine(String.format("method %s, uri %s, socket %s", method, uri, socket));
+            LOGGER.fine(String.format("method %s, raw path %s, socket %s", method, rawPath, socket));
             LOGGER.finer("HTTP-headers: " + requestHeaders);
         }
         this.socket = socket;
         this.inputStream = inputStream;
         this.outputStream = outputStream;
         this.method = method;
-        this.uri = uri;
+        this.rawPath = rawPath;;
         this.protocol = protocol;
-        this.requestHeaders = Collections.unmodifiableMap(new HashMap<>(requestHeaders));
+        this.requestHeaders = requestHeaders;
         this.keepAlive = keepAlive;
     }
 
@@ -79,12 +78,27 @@ public class HttpServerDispatchExchange {
     }
 
     /**
-     * Gets the request URI.
+     * Gets the request path.
      * 
-     * @return the request URI
+     * @return the raw path
      */
-    public String getRequestURI() {
-        return uri;
+    public String getRequestRawPath() {
+        return rawPath;
+    }
+
+    public URI getRequestURI() {
+        return getRequestURI(null);
+    }
+
+    public URI getRequestURI(String pathPrefix) {
+        String path = rawPath;
+        if (pathPrefix != null && path.startsWith(pathPrefix)) {
+            path = '/' + path.substring(pathPrefix.length());
+        }
+        return URI.create(String.format("http://%s:%d%s",
+                socket.getLocalAddress().getHostAddress(),
+                socket.getLocalPort(),
+                path));
     }
 
     /**
@@ -92,7 +106,7 @@ public class HttpServerDispatchExchange {
      * 
      * @return the request headers
      */
-    public Map<String, String> getRequestHeaders() {
+    public HttpHeaders getRequestHeaders() {
         return requestHeaders;
     }
 
@@ -110,7 +124,7 @@ public class HttpServerDispatchExchange {
      * 
      * @return the response headers
      */
-    public Map<String, String> getResponseHeaders() {
+    public HttpHeaders getResponseHeaders() {
         return responseHeaders;
     }
 
@@ -137,51 +151,64 @@ public class HttpServerDispatchExchange {
 
     /**
      * Sends the response headers.
-     * 
+     *
      * @param statusCode the HTTP status code
      * @param contentLength the content length, or -1 for chunked encoding
-     * @param headers 
      * @throws IOException if an I/O error occurs
      */
-    public void sendResponseHeaders(int statusCode, long contentLength, Map<String, String> headers) throws IOException {
+    public void sendResponseHeaders(int statusCode, long contentLength) throws IOException {
+        // Add status text
+        String statusMessage = switch (statusCode) {
+            case 101 -> "Upgrade to WebSocket-Connection";
+            case 200 -> "OK";
+            case 400 -> "Bad Request";
+            case 404 -> "Not Found";
+            case 500 -> "Internal Server Error";
+            default -> "Unknown";
+        };
+        sendResponseHeaders(statusCode, statusMessage, contentLength);
+    }
+
+    /**
+     * Sends the response headers.
+     * 
+     * @param statusCode the HTTP status code
+     * @param statusMessage status message
+     * @param contentLength the content length, or -1 for chunked encoding
+     * @throws IOException if an I/O error occurs
+     */
+    public void sendResponseHeaders(int statusCode, String statusMessage, long contentLength) throws IOException {
         if (responseHeadersSent) {
             throw new IllegalStateException("Response headers already sent");
         }
 
         StringBuilder responseLine = new StringBuilder();
         responseLine.append(protocol).append(" ").append(statusCode).append(" ");
-
-        // Add status text
-        switch (statusCode) {
-        	case 101: responseLine.append("Upgrade to WebSocket-Connection"); break;
-            case 200: responseLine.append("OK"); break;
-            case 400: responseLine.append("Bad Request"); break;
-            case 404: responseLine.append("Not Found"); break;
-            case 500: responseLine.append("Internal Server Error"); break;
-            default: responseLine.append("Unknown"); break;
-        }
+        responseLine.append(statusMessage);
         responseLine.append("\r\n");
 
         if (statusCode != 101) {
             // Add standard headers
             if (!responseHeaders.containsKey("Connection")) {
-                responseHeaders.put("Connection", keepAlive ? "keep-alive" : "close");
+                responseHeaders.set("Connection", keepAlive ? "keep-alive" : "close");
             }
 
             if (contentLength > 0) {
-                responseHeaders.put("Content-Length", String.valueOf(contentLength));
+                responseHeaders.set("Content-Length", String.valueOf(contentLength));
             } else if (statusCode != 204 && statusCode != 304) {
-                responseHeaders.put("Transfer-Encoding", "chunked");
+                responseHeaders.set("Transfer-Encoding", "chunked");
                 isResponseChunked = true;
             }
         }
-        responseHeaders.putAll(headers);
 
         // Write response line and headers
         outputStream.write(responseLine.toString().getBytes());
-        for (Map.Entry<String, String> header : responseHeaders.entrySet()) {
-            outputStream.write((header.getKey() + ": " + header.getValue() + "\r\n").getBytes());
-        }
+        responseHeaders.forEach((key, values) -> {
+            for (String value : values) {
+                String headerLine = key + ": " + value + "\r\n";
+                outputStream.write(headerLine.getBytes(StandardCharsets.ISO_8859_1));
+            }
+        });
         outputStream.write("\r\n".getBytes());
         outputStream.flush();
 
@@ -212,8 +239,8 @@ public class HttpServerDispatchExchange {
      */
     public void requestUpgrade() {
         upgradeRequested = true;
-        responseHeaders.put("Connection", "Upgrade");
-        responseHeaders.put("Upgrade", "websocket");
+        responseHeaders.set("Connection", "Upgrade");
+        responseHeaders.set("Upgrade", "websocket");
     }
 
     public void close() throws IOException {
