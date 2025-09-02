@@ -4,7 +4,9 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.concurrent.Executor;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -20,7 +22,7 @@ public class HttpServerDispatch {
     private final InetSocketAddress address;
     private final HttpHandler handler;
     private ServerSocket serverSocket;
-    private Executor executor;
+    private ExecutorService executor;
     private AtomicBoolean running = new AtomicBoolean(false);
 
     /**
@@ -40,7 +42,7 @@ public class HttpServerDispatch {
      * 
      * @param executor the executor to use, or null for default
      */
-    public void setExecutor(Executor executor) {
+    public void setExecutor(ExecutorService executor) {
         this.executor = (executor != null) ? executor : Executors.newCachedThreadPool();
     }
 
@@ -69,12 +71,34 @@ public class HttpServerDispatch {
      */
     public void stop(int delay) {
         running.set(false);
+        LOGGER.info("stop server");
+        if (delay > 0) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOGGER.warning("Interruption at sleep: " + e.getMessage());
+            }
+            LOGGER.info("stop server-socket");
+        }
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {
                 serverSocket.close();
             }
         } catch (IOException e) {
         	LOGGER.log(Level.WARNING, "Error closing server socket", e);
+        } finally {
+            executor.shutdown();
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOGGER.warning("Interruption at sleep: " + e.getMessage());
+            }
+            List<Runnable> waitingRunnables = executor.shutdownNow();
+            for (Runnable runnable : waitingRunnables) {
+                LOGGER.info("Waiting runnable: " + waitingRunnables);
+            }
         }
     }
 
@@ -82,7 +106,11 @@ public class HttpServerDispatch {
         while (running.get()) {
             try {
                 Socket clientSocket = serverSocket.accept();
-                HttpServerDispatchThread thread = new HttpServerDispatchThread(clientSocket, handler);
+                if (!running.get()) {
+                    clientSocket.getOutputStream().write("HTTP/1.1 500 server has been stopped\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+                    break;
+                }
+                HttpServerDispatchThread thread = new HttpServerDispatchThread(clientSocket, handler, running);
                 executor.execute(thread);
             } catch (IOException e) {
                 if (running.get()) {

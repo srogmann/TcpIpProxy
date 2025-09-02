@@ -193,16 +193,18 @@ public class WebSocketServer {
          * Sends a message if the outgoind queue is not empty.
          * Waits maximal 200ms for an outgoing message.
          * <p>This method is to be used in the sender-thread only.</p>
+         * @param wsConnIsActive  if the connection is active
          * @return <code>true</code> if a message has been sent
          * @throws IOException in case of an IO-error
          */
-        boolean sendOutgoingMessage() throws IOException {
+        boolean sendOutgoingMessage(AtomicBoolean wsConnIsActive) throws IOException {
             WsPayload payload;
             try {
                 payload = outgoingMessages.poll(200, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
-                LOG.info("Interrupt occurred: " + e.getMessage());
+                LOG.warning("Interrupt occurred: " + e);
                 Thread.currentThread().interrupt();
+                wsConnIsActive.set(false);
                 return false;
             }
             if (payload == null) {
@@ -458,10 +460,10 @@ public class WebSocketServer {
             thread.start();
 
             while (wsConnIsActive.get()) {
-                connection.sendOutgoingMessage();
+                connection.sendOutgoingMessage(wsConnIsActive);
             }
             // last outgoing message
-            connection.sendOutgoingMessage();
+            connection.sendOutgoingMessage(wsConnIsActive);
         }
 
         private void sendError(HttpServerDispatchExchange exchange, int code, String message) throws IOException {

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -20,21 +21,26 @@ public class HttpServerDispatchThread implements Runnable {
 
     private final Socket socket;
     private final HttpHandler handler;
+    private final AtomicBoolean running;
+
     private BufferedInputStream inputStream;
     private BufferedOutputStream outputStream;
+
 
     /**
      * Creates a new HTTP dispatch thread.
      * 
      * @param socket the client socket
      * @param handler the request handler
+     * @param running <code>true</code> if the server is running
      */
-    public HttpServerDispatchThread(Socket socket, HttpHandler handler) {
+    public HttpServerDispatchThread(Socket socket, HttpHandler handler, AtomicBoolean running) {
         if (LOGGER.isLoggable(Level.FINE)) {
             LOGGER.fine(String.format("thread %s, socket %s", Thread.currentThread(), socket));
         }
         this.socket = socket;
         this.handler = handler;
+        this.running = running;
     }
 
     @Override
@@ -45,7 +51,7 @@ public class HttpServerDispatchThread implements Runnable {
 
             // Handle requests in loop for persistent connections
             boolean keepAlive = true;
-            while (keepAlive && !socket.isClosed() && socket.isConnected()) {
+            while (keepAlive && !socket.isClosed() && socket.isConnected() && running.get()) {
                 keepAlive = handleRequest();
             }
         } catch (Exception e) {
