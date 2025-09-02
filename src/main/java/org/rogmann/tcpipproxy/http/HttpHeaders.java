@@ -72,7 +72,7 @@ public class HttpHeaders {
     }
 
     /**
-     * Gets the first value of a HTTP headers.
+     * Gets the first value of a HTTP header.
      * @param key key
      * @return value or <code>null</code>
      */

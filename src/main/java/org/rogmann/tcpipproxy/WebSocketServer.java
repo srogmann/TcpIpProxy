@@ -32,7 +32,8 @@ public class WebSocketServer {
     /** GUID for computing WebSocket key as per RFC 6455 */
     private static final String WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-    private final int port;
+    private final InetSocketAddress addr;
+
     private final String pathWebSocket;
     private final WebSocketHandler handler;
 
@@ -59,11 +60,10 @@ public class WebSocketServer {
             throw new IllegalArgumentException("WebSocketHandler cannot be null");
         }
 
-        this.port = port;
         this.pathWebSocket = pathWebSocket;
         this.handler = handler;
 
-        var addr = new InetSocketAddress(host, port);
+        this.addr = new InetSocketAddress(host, port);
         httpServer = new HttpServerDispatch(addr, new UpgradeHandler(httpHandler));
         httpServer.start();
     }
@@ -74,7 +74,7 @@ public class WebSocketServer {
      */
     public void start() throws IOException {
         httpServer.start();
-        LOG.info("WebSocket server started on port " + port + " with path " + pathWebSocket);
+        LOG.info("WebSocket server started on port " + addr.getPort() + " with path " + pathWebSocket);
     }
 
     /**
@@ -85,6 +85,14 @@ public class WebSocketServer {
     public void stop(int timeout) throws IOException {
         httpServer.stop(timeout);
         LOG.info("WebSocket server stopped");
+    }
+
+    /**
+     * Gets the bind-address of this server-instancd.
+     * @return server address
+     */
+    public InetSocketAddress getServerAddress() {
+        return addr;
     }
 
     /**
